@@ -1,12 +1,13 @@
-
 #include <linux/init.h>
+#include <linux/slab.h>
 #include <linux/module.h>
 #include <linux/uaccess.h>
 #include <linux/fs.h>
 #include <linux/proc_fs.h>
 #include <linux/timekeeping.h>
-#include <linux/workqueue.h>>
+#include <linux/workqueue.h>
 #include <linux/jiffies.h>
+#include "kmlab_given.h"
 
 // Module metadata
 MODULE_AUTHOR("Bruno Sanchez");
@@ -16,58 +17,74 @@ MODULE_LICENSE("GPL");
 #define MODULE_VERS "1.0"
 #define MODULE_NAME "kmlab"
 
-void my_work_handler(struct work_struct *work);
+void cpu_update_handler(struct work_struct *work);
+static void add_entry(unsigned long pid);
+static void update_entry(unsigned long pid, unsigned long cpu_value);
 
-DECLARE_DELAYED_WORK(my_work, my_work_handler);
+DECLARE_DELAYED_WORK(my_work, cpu_update_handler);
 
 static struct proc_dir_entry *example_dir, *proc_entry;
 
 #define BUFFER_LEN 1024
 
 /*Linked List Node*/
-struct my_list
+typedef struct _pid_list
 {
     struct list_head list; // linux kernel list implementation
     unsigned long pid;
     unsigned long cpu_time;
-};
+} PidList;
 
-LIST_HEAD(myLinkedList);
+LIST_HEAD(process_linked_list);
 
 static char proc_buffer[BUFFER_LEN];
 
-static void addData(unsigned long pid)
+static void add_entry(unsigned long pid)
 {
-    struct my_list *node = kmalloc(sizeof(struct my_list), GFP_KERNEL);
+    PidList *node = kmalloc(sizeof(PidList), GFP_KERNEL);
     node->pid = pid;
     node->cpu_time = 0;
     INIT_LIST_HEAD(&node->list);
     /*Add Node to Linked List*/
-    list_add_tail(&node->list, &myLinkedList);
+    list_add_tail(&node->list, &process_linked_list);
 }
 
-static void deleteList(void)
+static void delete_entry(unsigned long pid)
 {
-    struct my_list *cursor, *temp;
-    list_for_each_entry_safe(cursor, temp, &myLinkedList, list)
+    PidList *cursor, *temp;
+    list_for_each_entry_safe(cursor, temp, &process_linked_list, list)
+    {
+        if (cursor->pid == pid)
+        {
+            list_del(&cursor->list);
+            kfree(cursor);
+        }
+    }
+}
+
+static void delete_list(void)
+{
+    PidList *cursor, *temp;
+    list_for_each_entry_safe(cursor, temp, &process_linked_list, list)
     {
         list_del(&cursor->list);
         kfree(cursor);
     }
 }
 
-static ssize_t custom_read(struct file *file, char __user *user_buffer, size_t count, loff_t *offset)
+static ssize_t proc_read(struct file *file, char __user *user_buffer, size_t count, loff_t *offset)
 {
-    struct my_list *temp;
+    PidList *temp;
     int pos = 0;
     printk(KERN_INFO "calling our very own custom read method.");
-    list_for_each_entry(temp, &myLinkedList, list)
+    list_for_each_entry(temp, &process_linked_list, list)
     {
         pos += snprintf(&proc_buffer[pos], BUFFER_LEN - pos, "PID %lu time: %lu\n", temp->pid, temp->cpu_time);
         printk(KERN_INFO "Node %d data = %d\n", pos, temp->pid);
     }
     proc_buffer[pos++] = '\0';
-    if (*offset > 0) {
+    if (*offset > 0)
+    {
         return 0;
     }
     copy_to_user(user_buffer, proc_buffer, pos);
@@ -75,19 +92,32 @@ static ssize_t custom_read(struct file *file, char __user *user_buffer, size_t c
     return pos;
 }
 
-void my_work_handler(struct work_struct *work) 
+void cpu_update_handler(struct work_struct *work)
 {
-    struct my_list *temp;
-    printk(KERN_INFO "calling my_work_handler method.");
-    list_for_each_entry(temp, &myLinkedList, list)
+    PidList *temp;
+    printk(KERN_INFO "calling cpu_update_handler method.");
+    list_for_each_entry(temp, &process_linked_list, list)
     {
+        unsigned long cpu_use;
+        if (find_task_by_pid(temp->pid, &cpu_use))
+        {
+            printk(KERN_INFO "Error finding pid %d", temp->pid);
+            printk(KERN_INFO "Removing pid %d", temp->pid);
+            delete_entry(temp->pid);
+        }
+        else
+        {
+            if (cpu_use > 0)
+            {
+                temp->cpu_time += cpu_use;
+            }
+        }
         printk(KERN_INFO "data = %d\n", temp->pid);
-        temp->cpu_time += (ktime_get() % 32);
     }
     schedule_delayed_work(&my_work, msecs_to_jiffies(5000));
 }
 
-static ssize_t custom_write(struct file *file, const char __user *data, size_t count, loff_t *offset)
+static ssize_t proc_write(struct file *file, const char __user *data, size_t count, loff_t *offset)
 {
     int len;
     if (count > BUFFER_LEN)
@@ -100,17 +130,17 @@ static ssize_t custom_write(struct file *file, const char __user *data, size_t c
     }
     proc_buffer[len] = '\0';
     unsigned long pid = simple_strtoul(proc_buffer, NULL, 10);
-    addData(pid);
+    add_entry(pid);
     printk(KERN_INFO "Reading info from user %s -> %lu", proc_buffer, pid);
     return len;
 }
 
+/** */
 static struct proc_ops fops =
     {
-        .proc_write = custom_write,
-        .proc_read = custom_read};
+        .proc_write = proc_write,
+        .proc_read = proc_read};
 
-// Custom init and exit methods
 static int __init custom_init(void)
 {
     example_dir = proc_mkdir(MODULE_NAME, NULL);
