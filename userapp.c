@@ -13,7 +13,7 @@ void register_process(unsigned int pid)
     {
         printf("\n unable to write to /proc/kmlab/status!\n");
     }
-    fprintf(fp, "%u", getpid());
+    fprintf(fp, "%u", pid);
     fclose(fp);
 }
 

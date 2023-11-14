@@ -28,12 +28,12 @@ static struct proc_dir_entry *example_dir, *proc_entry;
 #define BUFFER_LEN 1024
 
 /*Linked List Node*/
-typedef struct _pid_list
+typedef struct pid_list
 {
     struct list_head list; // linux kernel list implementation
     unsigned long pid;
     unsigned long cpu_time;
-} PidList;
+};
 
 LIST_HEAD(process_linked_list);
 
@@ -41,7 +41,7 @@ static char proc_buffer[BUFFER_LEN];
 
 static void add_entry(unsigned long pid)
 {
-    PidList *node = kmalloc(sizeof(PidList), GFP_KERNEL);
+    struct pid_list *node = kmalloc(sizeof(struct pid_list), GFP_KERNEL);
     node->pid = pid;
     node->cpu_time = 0;
     INIT_LIST_HEAD(&node->list);
@@ -49,22 +49,9 @@ static void add_entry(unsigned long pid)
     list_add_tail(&node->list, &process_linked_list);
 }
 
-static void delete_entry(unsigned long pid)
-{
-    PidList *cursor, *temp;
-    list_for_each_entry_safe(cursor, temp, &process_linked_list, list)
-    {
-        if (cursor->pid == pid)
-        {
-            list_del(&cursor->list);
-            kfree(cursor);
-        }
-    }
-}
-
 static void delete_list(void)
 {
-    PidList *cursor, *temp;
+    struct pid_list *cursor, *temp;
     list_for_each_entry_safe(cursor, temp, &process_linked_list, list)
     {
         list_del(&cursor->list);
@@ -74,12 +61,12 @@ static void delete_list(void)
 
 static ssize_t proc_read(struct file *file, char __user *user_buffer, size_t count, loff_t *offset)
 {
-    PidList *temp;
+    struct pid_list *temp;
     int pos = 0;
     printk(KERN_INFO "calling our very own custom read method.");
     list_for_each_entry(temp, &process_linked_list, list)
     {
-        pos += snprintf(&proc_buffer[pos], BUFFER_LEN - pos, "PID %lu time: %lu\n", temp->pid, temp->cpu_time);
+        pos += snprintf(&proc_buffer[pos], BUFFER_LEN - pos, "%lu: %lu\n", temp->pid, temp->cpu_time);
         printk(KERN_INFO "Node %d data = %d\n", pos, temp->pid);
     }
     proc_buffer[pos++] = '\0';
@@ -94,27 +81,25 @@ static ssize_t proc_read(struct file *file, char __user *user_buffer, size_t cou
 
 void cpu_update_handler(struct work_struct *work)
 {
-    PidList *temp;
     printk(KERN_INFO "calling cpu_update_handler method.");
-    list_for_each_entry(temp, &process_linked_list, list)
+    struct pid_list *cursor, *temp;
+    list_for_each_entry_safe(cursor, temp, &process_linked_list, list)
     {
-        unsigned long cpu_use;
-        if (find_task_by_pid(temp->pid, &cpu_use))
+        unsigned long cpu_use = 0;
+        int get_cpu = get_cpu_use(cursor->pid, &cpu_use);
+        if (get_cpu < 0)
         {
-            printk(KERN_INFO "Error finding pid %d", temp->pid);
-            printk(KERN_INFO "Removing pid %d", temp->pid);
-            delete_entry(temp->pid);
+            printk(KERN_INFO "Pid %u not found - removing it", cursor->pid);
+            list_del(&cursor->list);
+            kfree(cursor);
         }
         else
         {
-            if (cpu_use > 0)
-            {
-                temp->cpu_time += cpu_use;
-            }
+            cursor->cpu_time = cpu_use;
         }
-        printk(KERN_INFO "data = %d\n", temp->pid);
+        printk(KERN_INFO "data = %u %lu\n", cursor->pid, cursor->cpu_time);
     }
-    schedule_delayed_work(&my_work, msecs_to_jiffies(5000));
+    schedule_delayed_work(&my_work, msecs_to_jiffies(1000));
 }
 
 static ssize_t proc_write(struct file *file, const char __user *data, size_t count, loff_t *offset)
@@ -161,6 +146,7 @@ static void __exit custom_exit(void)
     printk(KERN_INFO "Goodbye my friend, I shall miss you dearly...");
     cancel_delayed_work_sync(&my_work);
     flush_scheduled_work();
+    delete_list();
 }
 module_init(custom_init);
 module_exit(custom_exit);
