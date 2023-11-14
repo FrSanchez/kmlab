@@ -16,6 +16,7 @@ MODULE_LICENSE("GPL");
 
 #define MODULE_VERS "1.0"
 #define MODULE_NAME "kmlab"
+#define MSEC_INTERVAL 5000
 
 void cpu_update_handler(struct work_struct *work);
 static void add_entry(unsigned long pid);
@@ -67,7 +68,6 @@ static ssize_t proc_read(struct file *file, char __user *user_buffer, size_t cou
     list_for_each_entry(temp, &process_linked_list, list)
     {
         pos += snprintf(&proc_buffer[pos], BUFFER_LEN - pos, "%lu: %lu\n", temp->pid, temp->cpu_time);
-        printk(KERN_INFO "Node %d data = %d\n", pos, temp->pid);
     }
     proc_buffer[pos++] = '\0';
     if (*offset > 0)
@@ -97,9 +97,8 @@ void cpu_update_handler(struct work_struct *work)
         {
             cursor->cpu_time = cpu_use;
         }
-        printk(KERN_INFO "data = %u %lu\n", cursor->pid, cursor->cpu_time);
     }
-    schedule_delayed_work(&my_work, msecs_to_jiffies(1000));
+    schedule_delayed_work(&my_work, msecs_to_jiffies(MSEC_INTERVAL));
 }
 
 static ssize_t proc_write(struct file *file, const char __user *data, size_t count, loff_t *offset)
